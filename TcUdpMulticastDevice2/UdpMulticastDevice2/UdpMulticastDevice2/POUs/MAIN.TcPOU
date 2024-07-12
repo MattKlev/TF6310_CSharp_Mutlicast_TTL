@@ -1,0 +1,164 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1" ProductVersion="3.1.4024.12">
+  <POU Name="MAIN" Id="{8c490c9d-5571-4720-8041-5f11a4e2d42d}" SpecialFunc="None">
+    <Declaration><![CDATA[PROGRAM MAIN
+VAR
+	bEnable					: BOOL 	:= TRUE;
+	nLocalPort				: UDINT := 1001;
+	sLocalHost				: T_IPv4Addr := '172.16.17.48';(* Adapt local IP address to your device *)
+	nRemotePort				: UDINT := 1002;
+	sMulticastAddr			: T_IPv4Addr := '224.1.1.255';
+	
+	fbUdpCreate 			: FB_SocketUdpCreate;
+	fbSocketAddMulticast 	: FB_SocketUdpAddMulticastAddress;
+	fbSocketDropMulticast 	: FB_SocketUdpDropMulticastAddress;
+	fbSocketSend  			: FB_SocketUdpSendTo;
+	fbSocketReceive 		: FB_SocketUdpReceiveFrom;
+	fbSocketClose			: FB_SocketClose;
+	fbCloseAll				: FB_SocketCloseAll;
+	bInitialize				: BOOL := TRUE;
+	bUdpCreated				: BOOL;
+	bMulticastAdded			: BOOL; 
+	
+	InData					:RecivedData;
+	LastRecived				:RecivedData;
+	NullData				:RecivedData;
+	//nCounterIn 				: UDINT;
+	nCounterOut 			: UDINT;
+	sCounterOutAsString		: STRING;
+	nState 					: INT;
+END_VAR]]></Declaration>
+    <Implementation>
+      <ST><![CDATA[(* On PLC reset or program download close all opened/created sockets *)
+fbCloseAll( bExecute:= bInitialize );
+IF fbCloseAll.bBusy OR fbCloseAll.bError THEN
+	RETURN;
+END_IF
+bInitialize := FALSE;
+
+
+CASE nState OF
+0:
+	IF bEnable THEN
+		bUdpCreated := FALSE;
+		bMulticastAdded := FALSE;
+		nState := 1;
+	END_IF
+1:
+	fbUdpCreate( bExecute := FALSE );
+	fbUdpCreate( nLocalPort := nLocalPort, sLocalHost := sLocalHost, bExecute := TRUE);
+	nState := 2;
+2:
+	fbUdpCreate( bExecute := FALSE );
+	IF NOT fbUdpCreate.bBusy THEN
+		IF NOT fbUdpCreate.bError THEN
+			bUdpCreated := TRUE;
+			fbSocketAddMulticast( bExecute := FALSE );
+			fbSocketAddMulticast( hSocket := fbUdpCreate.hSocket, sMulticastAddr := sMulticastAddr, bExecute := TRUE );
+			nState := 3;
+		ELSE
+			nState := 100;
+		END_IF
+	END_IF
+3:
+	fbSocketAddMulticast( bExecute := FALSE );
+	IF NOT fbSocketAddMulticast.bBusy THEN
+		IF NOT fbSocketAddMulticast.bError THEN
+			bMulticastAdded := TRUE;
+			nState := 4;
+		ELSE
+			nState := 100;
+		END_IF
+	END_IF
+	
+4:
+	IF bEnable THEN
+		nCounterOut := nCounterOut + 1;
+		sCounterOutAsString:=TO_STRING(nCounterOut);
+		fbSocketSend( bExecute := FALSE );
+		fbSocketSend( nRemotePort := nRemotePort, sRemoteHost := sMulticastAddr, hSocket := fbUdpCreate.hSocket, cbLen:= SIZEOF(sCounterOutAsString), pSrc := ADR(sCounterOutAsString), bExecute := TRUE );
+		nState := 5;
+	ELSE
+		nState := 10;
+	END_IF
+5:
+	fbSocketSend( bExecute := FALSE );
+	IF NOT fbSocketSend.bBusy THEN
+		IF NOT fbSocketSend.bError THEN
+			fbSocketReceive( bExecute := FALSE );
+			MEMSET(destAddr:=ADR(InData) , fillByte:=0 , n:=SIZEOF(InData));
+			fbSocketReceive( hSocket := fbUdpCreate.hSocket, cbLen := SIZEOF(InData), pDest := ADR(InData), bExecute := TRUE );
+			nState := 6;
+		ELSE
+ 			nState := 100;
+		END_IF
+	END_IF
+6:	
+	fbSocketReceive( bExecute := FALSE );
+	IF NOT fbSocketReceive.bBusy THEN
+		IF NOT fbSocketReceive.bError THEN
+			IF MEMCMP(pBuf1:=ADR(InData), pBuf2:=ADR(NullData) , n:=SIZEOF(RecivedData)) <>0 THEN
+				LastRecived:=InData;
+			END_IF
+			nState:= 4;
+		ELSE
+			nState := 100;
+		END_IF
+	END_IF
+
+10:
+	fbSocketDropMulticast( bExecute := FALSE );
+	fbSocketDropMulticast( hSocket := fbUdpCreate.hSocket, sMulticastAddr := sMulticastAddr, bExecute := TRUE );
+	nState := 11;
+11:	
+	fbSocketDropMulticast( bExecute := FALSE );
+	IF NOT fbSocketDropMulticast.bBusy THEN
+		bMulticastAdded := FALSE;
+		IF NOT fbSocketDropMulticast.bError THEN
+			nState := 20;
+		ELSE
+			nState := 100;
+		END_IF
+	END_IF
+
+20:	
+	fbSocketClose( bExecute := FALSE );
+	fbSocketClose( hSocket := fbUdpCreate.hSocket, bExecute := TRUE );
+	nState := 21;
+21:	
+	fbSocketClose( bExecute := FALSE );
+	IF NOT fbSocketClose.bBusy THEN
+		bUdpCreated := FALSE;
+		IF NOT fbSocketClose.bError THEN
+			nState := 0;	
+		ELSE
+			nState := 100;	
+		END_IF
+	END_IF
+	
+100:
+	IF bMulticastAdded THEN
+		nState := 10;
+	ELSIF bUdpCreated THEN
+		nState := 20;
+	ELSE
+		nState := 0;
+	END_IF
+	
+END_CASE]]></ST>
+    </Implementation>
+    <LineIds Name="MAIN">
+      <LineId Id="3" Count="35" />
+      <LineId Id="151" Count="0" />
+      <LineId Id="40" Count="7" />
+      <LineId Id="148" Count="0" />
+      <LineId Id="48" Count="10" />
+      <LineId Id="139" Count="0" />
+      <LineId Id="59" Count="9" />
+      <LineId Id="142" Count="0" />
+      <LineId Id="144" Count="1" />
+      <LineId Id="69" Count="44" />
+      <LineId Id="2" Count="0" />
+    </LineIds>
+  </POU>
+</TcPlcObject>
